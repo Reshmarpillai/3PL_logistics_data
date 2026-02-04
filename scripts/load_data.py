@@ -4,6 +4,8 @@ Loads all 9 tables in dependency order with index management
 for faster bulk loading.
 """
 
+import io
+import re
 import sys
 import time
 from pathlib import Path
@@ -116,10 +118,18 @@ def load_table(
         f"FROM STDIN WITH (FORMAT CSV, HEADER, DELIMITER ',')"
     )
 
+    # Preprocess: fix pandas float-int issue (e.g. "181.0" → "181")
+    # This happens when integer columns contain NaN — pandas promotes to float64
+    _float_int_re = re.compile(r"(?<![.\d])(\d+)\.0(?![.\d])")
+
     start = time.perf_counter()
     with open(csv_path, "r", encoding="utf-8") as f:
+        cleaned = io.StringIO()
+        for line in f:
+            cleaned.write(_float_int_re.sub(r"\1", line))
+        cleaned.seek(0)
         with conn.cursor() as cur:
-            cur.copy_expert(copy_sql, f)
+            cur.copy_expert(copy_sql, cleaned)
     conn.commit()
     elapsed = time.perf_counter() - start
 
