@@ -383,10 +383,11 @@ def generate_products() -> dict:
     }
     skus = np.array([f"{sku_prefixes[cat]}-{rng.integers(10000, 99999)}" for cat in categories])
 
-    # Introduce 2% duplicate SKUs
-    n_dupes = int(n * 0.02)
-    dupe_targets = rng.choice(n, size=n_dupes, replace=False)
-    dupe_sources = rng.choice(n, size=n_dupes, replace=True)
+    # Introduce ~2% duplicate SKUs (~200 products share a SKU with another)
+    # Natural collisions from 5-digit range add ~1%, so only add ~0.5% deliberate
+    n_dupes = int(n * 0.005)
+    dupe_sources = rng.choice(n, size=n_dupes, replace=False)
+    dupe_targets = rng.choice(np.setdiff1d(np.arange(n), dupe_sources), size=n_dupes, replace=False)
     skus[dupe_targets] = skus[dupe_sources]
 
     # Product names
@@ -537,14 +538,19 @@ def generate_inventory(wh_data: dict, prod_data: dict) -> None:
     warehouse_ids = rng.choice(wh_data["ids"], size=n)
     product_ids = rng.choice(prod_data["ids"], size=n)
 
-    # quantity_on_hand: normal distribution, mean=200, std=150
-    qty = rng.normal(loc=200, scale=150, size=n).astype(np.int32)
-    # ~3% negative values are naturally produced; ensure at least 3%
-    neg_count = (qty < 0).sum()
+    # quantity_on_hand: normal distribution, mean=200, std=80 (tighter spread)
+    qty = rng.normal(loc=200, scale=80, size=n).astype(np.int32)
+    # Target ~3% negative — force exactly 3%
+    neg_idx = np.where(qty < 0)[0]
+    pos_idx = np.where(qty > 0)[0]
     target_neg = int(n * 0.03)
-    if neg_count < target_neg:
-        pos_idx = np.where(qty > 0)[0]
-        make_neg = rng.choice(pos_idx, size=target_neg - neg_count, replace=False)
+    if len(neg_idx) > target_neg:
+        # Too many negatives — convert excess back to positive
+        fix_idx = rng.choice(neg_idx, size=len(neg_idx) - target_neg, replace=False)
+        qty[fix_idx] = rng.integers(1, 100, size=len(fix_idx))
+    elif len(neg_idx) < target_neg:
+        # Too few negatives — convert some positives
+        make_neg = rng.choice(pos_idx, size=target_neg - len(neg_idx), replace=False)
         qty[make_neg] = -rng.integers(1, 50, size=len(make_neg))
 
     # reorder_level: based on category demand (50-300 range)
